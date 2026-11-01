@@ -2,6 +2,7 @@
 
 These build helpers locate the repository themselves and accept Gradle options:
 
+- `scripts/build-apk.sh [--release] [--abi ABI] [--install] [Gradle options]` builds a phone APK from a fresh checkout: it installs missing SDK packages, initialises libjuice, restores the vendor libraries (`dist.py restore`) and the Clarity provider (`dist/clarity-provider.py`), then optionally installs and opens the APK on the running emulator or phone.
 - `scripts/debug.sh [Gradle options]` builds the phone debug APK (`assembleMobileDebug`).
 - `scripts/makeapk.sh [Gradle options]` builds the Wear release APK (`assembleWearRelease`), preserving the original helper's target.
 - `scripts/build-dist.sh {phone|phone-all|wear|wear-all|all} [Gradle options]` builds and verifies production-signed distribution APKs. See [distribution.md](../docs/distribution.md) for private inputs and release procedures.

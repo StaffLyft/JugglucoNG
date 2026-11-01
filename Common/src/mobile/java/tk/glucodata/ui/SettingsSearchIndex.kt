@@ -317,6 +317,8 @@ internal object SettingsSearchIndex {
             condition = SettingsSearchCondition.LIBREVIEW),
         SettingsSearchEntry(R.string.dexcom_share_title, SHARING, Icons.Default.CloudUpload, T, route("settings/dexcom-share"),
             keywords = listOf(R.string.dexcom_share_desc), condition = SettingsSearchCondition.DEXCOM_SHARE),
+        SettingsSearchEntry(R.string.clarity_title, SHARING, Icons.Default.Insights, T, route("settings/clarity"),
+            keywords = listOf(R.string.clarity_desc, R.string.clarity_send_enabled), terms = listOf("Dexcom")),
         SettingsSearchEntry(R.string.mq_account_title, SHARING, Icons.Default.AccountCircle, T, route("settings/mq-account"),
             keywords = listOf(R.string.settings_mq_account_desc), terms = listOf("Glutec"),
             condition = SettingsSearchCondition.MQ_ACCOUNT),

@@ -20,6 +20,7 @@ class HttpResponseReader {
     size_t remaining=0,headerBytes=0;
     int code=-1;
     std::vector<char> body;
+    std::string redirect;
 
     static std::string_view trim(std::string_view text) {
         while(!text.empty()&&(text.front()==' '||text.front()=='\t')) text.remove_prefix(1);
@@ -40,8 +41,9 @@ class HttpResponseReader {
            (status.size()>12&&status[12]!=' ')) return fail();
         const auto parsed=std::from_chars(status.data()+9,status.data()+12,code);
         if(parsed.ec!=std::errc{}||parsed.ptr!=status.data()+12||code<100||code>599) return fail();
-        bool lengthPresent=false,chunked=false;
+        bool lengthPresent=false,chunked=false,locationPresent=false;
         size_t length=0;
+        redirect.clear();
         size_t offset=lineEnd==text.npos?text.size():lineEnd+2;
         while(offset<text.size()) {
             size_t end=text.find("\r\n",offset);
@@ -58,6 +60,10 @@ class HttpResponseReader {
             } else if(equal(name,"Transfer-Encoding")) {
                 if(chunked||!equal(value,"chunked")) return fail();
                 chunked=true;
+            } else if(equal(name,"Location")) {
+                // An ambiguous redirect target is reported as no target at all.
+                redirect=locationPresent?std::string():std::string(value);
+                locationPresent=true;
             }
             offset=end+2;
         }
@@ -142,5 +148,6 @@ public:
     }
     bool complete() const { return state==State::Done; }
     int status() const { return code; }
+    const std::string &location() const { return redirect; }
     std::vector<char> takeBody() { return std::move(body); }
 };

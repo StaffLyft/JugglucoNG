@@ -22,11 +22,19 @@
 #include <atomic>
 #include <memory>
 #include <vector>
+#include <string>
 #include <string_view>
 #include <span>
 #include <openssl/ssl.h>
 
 using namespace std::literals;
+
+// Borrowed only for one connection. Never installed on the shared SSL_CTX.
+struct HttpsClientIdentity {
+    X509 *certificate;
+    EVP_PKEY *privateKey;
+    X509 *issuer;
+};
 
 struct HTTPSRequestOptions {
     int timeoutMilliseconds = 15000;
@@ -38,6 +46,9 @@ struct HTTPSRequestOptions {
     // attempt lost to another server while the negotiation itself goes on.
     std::shared_ptr<const std::atomic_bool> superseded;
     bool verifyCertificate = true;
+    // Receives a redirect's Location; following it is the caller's decision.
+    std::string *location = nullptr;
+    const HttpsClientIdentity *client = nullptr;
 };
 
 class ContextHTTPS {

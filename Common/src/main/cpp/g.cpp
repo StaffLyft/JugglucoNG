@@ -26,6 +26,7 @@
 //
 // Created by jka on 27-11-20.
 //
+#include "net/clarity/clarity.hpp"
 #include <algorithm>
 #include <cinttypes>
 #include <future>
@@ -2334,6 +2335,7 @@ extern void wakeuploader();
 extern void wakestreamuploader();
 extern void wakelibrecurrent();
 void wakewithcurrent() {
+  wakeclarity();
   wakestreamuploader();
 #if !defined(WEAROS) && !defined(TESTMENU)
   if (settings->data()->LibreCurrentOnly) {

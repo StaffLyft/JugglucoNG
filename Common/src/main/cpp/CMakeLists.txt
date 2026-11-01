@@ -91,6 +91,8 @@ set(NO_SERVER ON CACHE BOOL "Disable server support" FORCE)
 set(NO_TESTS  ON CACHE BOOL "Disable tests build" FORCE)
 add_subdirectory(libjuice)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/net/clarity/integration.cmake")
+
 target_link_libraries( g PRIVATE c++_static c ${log-lib} ${OPENGL_LIB} android EGL m atomic z dl $<BUILD_INTERFACE:juice>)
 export(TARGETS g ANDROID_MK Android.mk)
 

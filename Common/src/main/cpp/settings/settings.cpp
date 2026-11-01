@@ -28,6 +28,7 @@
 #include "datbackup.hpp"
 #include "sensoren.hpp"
 #include "settings.hpp"
+#include "net/clarity/clarity.hpp"
 #include "config.h"
 #ifdef USE_MEAL
 #include "meal/Meal.hpp"
@@ -320,6 +321,7 @@ extern void            startlibrethread();
 extern void startthreads();
 extern    void startwatchthread(int port) ;
 void startthreads() {
+    startclaritythread();
     Backup::startbackup(globalbasedir); 
     doversionupdate();
 #ifndef WEAROS

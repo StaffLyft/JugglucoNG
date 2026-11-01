@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "source": {
+    "name": "Juggluco-11.5.4.apk",
+    "page": "https://sourceforge.net/projects/juggluco/files/Juggluco-11.5.4.apk/download",
+    "size": 35287998,
+    "sha256": "27a46a91086f85b20d6baae7ee07bf19f11fc646a0693be6954eadab710b5fdc"
+  },
+  "files": [
+    {
+      "path": "Common/src/clarity/jniLibs/arm64-v8a/liblibre_receiver_skb.so",
+      "entry": "lib/arm64-v8a/liblibre_receiver_skb.so",
+      "size": 4468408,
+      "sha256": "7b946a3012ad278a74c9cccfc7da615582a494ae963439e8c9f0b6931b7fa038"
+    },
+    {
+      "path": "Common/src/clarity/jniLibs/armeabi-v7a/liblibre_receiver_skb.so",
+      "entry": "lib/armeabi-v7a/liblibre_receiver_skb.so",
+      "size": 4819728,
+      "sha256": "b8b2fad33c68e46762a11b6e08fa0e2e38a3f60d5acdae165af0097109877492"
+    }
+  ]
+}

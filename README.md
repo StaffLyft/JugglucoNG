@@ -92,15 +92,15 @@ Support for individual sensors is community-developed and may change or stop wor
 
 ## Building
 
-Requirements: JDK 21, Android SDK with NDK and CMake, and the libjuice submodule:
+Requirements: JDK 21 and the Android SDK command-line tools. One script fetches everything else — the NDK, CMake and SDK platform, the libjuice submodule, the vendor sensor libraries and the Dexcom Clarity provider — checks each download against a pinned SHA-256, and builds:
 
 ```sh
-git submodule update --init
-
-./gradlew :Common:assembleMobileDebug --no-daemon
---
-./gradlew :Common:assembleMobileRelease --no-daemon
+scripts/build-apk.sh              # debug APK
+scripts/build-apk.sh --release    # release APK
+scripts/build-apk.sh --install    # also install on the running emulator or phone and open it
 ```
+
+The downloaded libraries are closed-source, so they stay out of git: they land in `Common/src/main/jniLibs/` and `Common/src/clarity/jniLibs/`, and the upstream Juggluco APK the provider comes from is cached in `.local/build-inputs/`.
 
 The app is localized into 15 languages; new user-facing strings go into `Common/src/main/res/values/strings.xml` and every `values-*` locale.
 

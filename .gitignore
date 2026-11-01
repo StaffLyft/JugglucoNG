@@ -29,6 +29,7 @@ Common/src/main/jniLibs/
 Common/src/libre3/jniLibs/
 BTautoconnect.patch
 Common/src/mobileSi/jniLibs/
+Common/src/clarity/jniLibs/
 */mobileLibre*
 .idea/
 

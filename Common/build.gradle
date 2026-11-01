@@ -136,6 +136,9 @@ android {
             dimension = 'wearos'
             versionNameSuffix = '-phone'
             buildConfigField 'int', 'isWear', '0'
+            externalNativeBuild.cmake {
+                arguments "-DCLARITY=ON"
+            }
         }
         wear {
             dimension = 'wearos'
@@ -324,6 +327,9 @@ android {
         mobile {
             java.srcDirs += ['src/mobileSi/java', 'src/mobileSiGoogle/java']
             res.srcDirs += ['src/mobileSi/res']
+            // Restored by scripts/dist/clarity-provider.py; kept apart from the
+            // inventoried vendor inputs that dist.py check-inputs guards.
+            jniLibs.srcDirs += ['src/clarity/jniLibs']
         }
         wear {
             java.srcDirs += ['src/wearSi/java']

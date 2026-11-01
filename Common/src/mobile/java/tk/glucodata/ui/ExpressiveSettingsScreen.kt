@@ -584,6 +584,14 @@ fun ExpressiveSettingsScreen(
                         onClick = { navController.navigate("settings/dexcom-share") }
                     )
                 }
+                SettingsItem(
+                    title = stringResource(R.string.clarity_title),
+                    subtitle = stringResource(R.string.clarity_desc),
+                    icon = Icons.Default.Insights,
+                    iconTint = sharingColor,
+                    position = CardPosition.MIDDLE,
+                    onClick = { navController.navigate("settings/clarity") }
+                )
                 if (showMqAccount) {
                     SettingsItem(
                         title = stringResource(R.string.mq_account_title),

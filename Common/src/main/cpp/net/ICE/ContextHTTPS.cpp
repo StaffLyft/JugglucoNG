@@ -553,8 +553,49 @@ static bool verifyTLSHost(SSL *ssl,const std::string &hostName) {
     return true;
 }
 
+static bool useClientIdentity(SSL *ssl,const HttpsClientIdentity &client) {
+    if(!client.certificate||!client.privateKey||!client.issuer) {
+        LOGARHTTPS("Incomplete client certificate identity");
+        return false;
+        }
+#ifdef DLSYMS_SSL
+    static auto useCertificate=reinterpret_cast<int (*)(SSL *,X509 *)>(dlsym(openssl(),"SSL_use_certificate"));
+    static auto usePrivateKey=reinterpret_cast<int (*)(SSL *,EVP_PKEY *)>(dlsym(openssl(),"SSL_use_PrivateKey"));
+    static auto checkPrivateKey=reinterpret_cast<int (*)(const SSL *)>(dlsym(openssl(),"SSL_check_private_key"));
+    static auto addChainCertificate=reinterpret_cast<int (*)(SSL *,X509 *)>(dlsym(openssl(),"SSL_add1_chain_cert"));
+    if(!useCertificate||!usePrivateKey||!checkPrivateKey||(!addChainCertificate&&!SSL_ctrlptr)) {
+        LOGARHTTPS("Client certificate TLS functions unavailable");
+        return false;
+        }
+#else
+    auto useCertificate=SSL_use_certificate;
+    auto usePrivateKey=SSL_use_PrivateKey;
+    auto checkPrivateKey=SSL_check_private_key;
+#endif
+    if(useCertificate(ssl,client.certificate)!=1) {
+        LOGARHTTPS("SSL_use_certificate failed");
+        return false;
+        }
+    if(usePrivateKey(ssl,client.privateKey)!=1||checkPrivateKey(ssl)!=1) {
+        LOGARHTTPS("Client certificate/private key mismatch");
+        return false;
+        }
+#ifdef DLSYMS_SSL
+    const long added=addChainCertificate?addChainCertificate(ssl,client.issuer):SSL_ctrl(ssl,SSL_CTRL_CHAIN_CERT,1,client.issuer);
+#else
+    const long added=SSL_add1_chain_cert(ssl,client.issuer);
+#endif
+    if(added!=1) {
+        LOGARHTTPS("Cannot add client certificate issuer");
+        return false;
+        }
+    return true;
+    }
+
 std::pair<std::vector<char>,int> ContextHTTPS::request(const std::string_view host,int port,const std::string_view path,const std::string_view TYPE,const std::span<const char> input, const std::string_view header,const HTTPSRequestOptions &options) {
     std::vector<char> uit;   
+    if(options.location)
+        options.location->clear();
     if(error) {
         return {uit,-1};
         }
@@ -590,6 +631,8 @@ std::pair<std::vector<char>,int> ContextHTTPS::request(const std::string_view ho
        #endif
        SSL_set_verify(ssl,SSL_VERIFY_NONE,nullptr);
        }
+    if(options.client&&!useClientIdentity(ssl,*options.client))
+        return {uit,-1};
 
     LOGARHTTPS("before SSL_connect");
     int conres;
@@ -635,20 +678,24 @@ std::pair<std::vector<char>,int> ContextHTTPS::request(const std::string_view ho
    if(options.responseTimeoutMilliseconds>0)
        deadline.restart(options.responseTimeoutMilliseconds);
    HttpResponseReader response;
+   const auto finish=[&]()->std::pair<std::vector<char>,int> {
+       if(options.location) *options.location=response.location();
+       return {response.takeBody(),response.status()};
+   };
    while(!deadline.stopped()) {
        const int count=SSL_read(ssl,dataptr,std::min(maxdata,16*1024));
        if(count>0) {
            if(!response.append({dataptr,static_cast<size_t>(count)}))
                return {{},-1};
            if(response.complete())
-               return {response.takeBody(),response.status()};
+               return finish();
            continue;
        }
        // Only a TLS close-notify completes a close-delimited response. A
        // timeout, cancellation, truncated body, or abrupt TLS failure must
        // not expose partial JSON / signaling with a successful HTTP code.
        if(SSL_get_error(ssl,count)==SSL_ERROR_ZERO_RETURN) {
-           if(response.closed()) return {response.takeBody(),response.status()};
+           if(response.closed()) return finish();
            return {{},-1};
        }
        if(SSLwait(ssl,count,sock,deadline)<0) return {{},-1};

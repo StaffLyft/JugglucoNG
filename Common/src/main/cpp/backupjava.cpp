@@ -21,6 +21,7 @@
 #include "datbackup.hpp"
 #include "fromjava.h"
 #include "net/ICE/ICEConfig.hpp"
+#include "net/clarity/clarity.hpp"
 #include "net/netstuff.hpp"
 #include <alloca.h>
 #include <cstring>
@@ -478,6 +479,7 @@ extern "C" JNIEXPORT void JNICALL fromjava(networkpresent)(JNIEnv *env,
   wakeuploader();
 #if !defined(WEAROS) && !defined(TESTMENU)
   wakeaftermin(0);
+  wakeclarity();
 #endif
   LOGAR("end networkpresend");
 }
