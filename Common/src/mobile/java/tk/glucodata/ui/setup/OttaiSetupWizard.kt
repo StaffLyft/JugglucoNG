@@ -65,6 +65,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -508,6 +509,12 @@ fun OttaiSetupWizard(
 ) {
     val tag = "OttaiSetupWizard"
     val ui = rememberWizardUiMetrics()
+    // Restricted mode: adding the sensor works as usual, including the cloud unbind a new
+    // sensor needs before it will connect (it releases the account binding and deletes
+    // nothing here). Deleting or exporting saved keys and the manual firmware entry need full
+    // mode: while restricted they say so, and the setup stays where it is.
+    val fullModeGuard = tk.glucodata.ui.restricted.rememberFullModeGuard()
+    val restrictedLocked = tk.glucodata.RestrictedMode.state.collectAsStateWithLifecycle().value.locked
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -565,6 +572,11 @@ fun OttaiSetupWizard(
     var connectedAddresses by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingDelete by remember { mutableStateOf<OttaiSavedSensor?>(null) }
     var exportTargetId by remember { mutableStateOf("") }
+    // Restricted again (an adult left a confirmation open for a minute): the full-mode
+    // confirmation closes. Unbinding stays open: changing sensors needs it.
+    LaunchedEffect(restrictedLocked) {
+        if (restrictedLocked) pendingDelete = null
+    }
     // Results of one-off acts (export, delete, unbind, a failed import) are said once and go.
     val snackbar = remember { SnackbarHostState() }
     fun announce(message: String) {
@@ -729,30 +741,12 @@ fun OttaiSetupWizard(
         }
 
         currentMaterials = null
-        // A wizard-owned BLE bootstrap survives Activity configuration changes. Its result is
-        // persisted, so a recreated composition waits for that same transaction instead of
-        // launching a duplicate or showing the retry button while bindV3 is still finishing.
+        // The wizard no longer starts the legacy BLE credential bootstrap (Connect runs the
+        // firmware/setup session instead), so a pending flag here was left by an older build
+        // killed mid-bootstrap. Waiting on it held materialLoading (and thus Connect) for 90 s
+        // on every selection; nothing would ever complete it. Drop it and continue normally.
         if (OttaiRegistry.isV3CredentialBootstrapPending(context, canonical)) {
-            materialLoading = true
-            repeat(180) {
-                delay(500L)
-                val completed = withContext(Dispatchers.IO) {
-                    OttaiRegistry.loadMaterials(context, canonical).takeIf { it.authKeys != null }
-                }
-                if (completed != null) {
-                    currentMaterials = completed
-                    if (completed.deviceVersion.isNotBlank()) selectedDeviceVersion = completed.deviceVersion
-                    materialLoading = false
-                    showStatus("")
-                    return@LaunchedEffect
-                }
-                if (!OttaiRegistry.isV3CredentialBootstrapPending(context, canonical)) {
-                    materialLoading = false
-                    return@LaunchedEffect
-                }
-            }
-            materialLoading = false
-            return@LaunchedEffect
+            OttaiRegistry.setV3CredentialBootstrapPending(context, canonical, false)
         }
         if (signedIn && lastAutoFetchId != canonical) {
             lastAutoFetchId = canonical
@@ -1284,7 +1278,10 @@ fun OttaiSetupWizard(
     }
     if (showFirmwareTest) {
         androidx.compose.runtime.key(firmwareLaunchId) {
+            // The manual firmware entry needs full mode; on relock it closes as soon as no
+            // transfer is running. Preparing a new sensor during setup carries on.
             OttaiFirmwareTestDialog(cloudId, bleAddress, prepareForSetup = setupAfterFirmware,
+                closeWhenIdle = restrictedLocked && !setupAfterFirmware,
                 onPrepared = {
                     showFirmwareTest = false
                     setupAfterFirmware = false
@@ -1393,17 +1390,21 @@ fun OttaiSetupWizard(
                 OttaiCloudClient.loadOtaSession(context),
                 OttaiConstants.normalizeBleAddress(bleAddress) != null,
                 OttaiFirmwareSession.hasPendingSetup(context, cloudId))) ({
-                setupAfterFirmware = false
-                firmwareLaunchId++
-                OttaiSetupScanHold.stopPanelScans()
-                showFirmwareTest = true
+                fullModeGuard {
+                    setupAfterFirmware = false
+                    firmwareLaunchId++
+                    OttaiSetupScanHold.stopPanelScans()
+                    showFirmwareTest = true
+                }
             }) else null,
             onSignIn = { openSignIn() },
             onExport = if (hasMaterials && hasSensorCode) {
                 {
-                    val id = canonicalSensorId.orEmpty()
-                    exportTargetId = id
-                    exportLauncher.launch("ottai_${id}.json")
+                    fullModeGuard {
+                        val id = canonicalSensorId.orEmpty()
+                        exportTargetId = id
+                        exportLauncher.launch("ottai_${id}.json")
+                    }
                 }
             } else null,
         )
@@ -1451,10 +1452,12 @@ fun OttaiSetupWizard(
                     },
                     onSelectSaved = selectSaved,
                     onExport = { sensor ->
-                        exportTargetId = sensor.sensorId
-                        exportLauncher.launch("ottai_${sensor.sensorId}.json")
+                        fullModeGuard {
+                            exportTargetId = sensor.sensorId
+                            exportLauncher.launch("ottai_${sensor.sensorId}.json")
+                        }
                     },
-                    onDelete = { pendingDelete = it },
+                    onDelete = { sensor -> fullModeGuard { pendingDelete = sensor } },
                     onSelectAccountDevice = selectAccountDevice,
                     onUnbind = { pendingCloudUnbind = it },
                     onImport = launchImport,

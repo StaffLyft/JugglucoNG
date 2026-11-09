@@ -81,7 +81,8 @@ if [ ${#packages[@]} -gt 0 ]; then
     "$sdkmanager" "${packages[@]}"
 fi
 
-if [ ! -f Common/src/main/cpp/libjuice/CMakeLists.txt ]; then
+if [ "$(git submodule status Common/src/main/cpp/libjuice | cut -c1)" != " " ]; then
+    git submodule sync --quiet Common/src/main/cpp/libjuice
     git submodule update --init Common/src/main/cpp/libjuice
 fi
 

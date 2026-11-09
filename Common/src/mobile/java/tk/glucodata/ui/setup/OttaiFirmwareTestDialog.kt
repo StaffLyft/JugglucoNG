@@ -42,7 +42,10 @@ import tk.glucodata.drivers.ottai.OttaiCloudClient
 
 @Composable
 internal fun OttaiFirmwareTestDialog(sensorId: String, address: String, prepareForSetup: Boolean = false,
-    onPrepared: () -> Unit = {}, onRetrySetup: () -> Unit = {}, onDismiss: () -> Unit) {
+    onPrepared: () -> Unit = {}, onRetrySetup: () -> Unit = {},
+    /** Close as soon as no transfer is running (restricted mode relocked); never mid-transfer. */
+    closeWhenIdle: Boolean = false,
+    onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var mode by remember(sensorId, address) { mutableStateOf<OttaiFirmwareMode?>(null) }
@@ -55,8 +58,10 @@ internal fun OttaiFirmwareTestDialog(sensorId: String, address: String, prepareF
     if (loading) return
     val selected = mode
     if (selected != null) {
-        OttaiFirmwareSessionDialog(sensorId, address, selected, prepareForSetup, onPrepared, onRetrySetup, onDismiss)
+        OttaiFirmwareSessionDialog(sensorId, address, selected, prepareForSetup, onPrepared, onRetrySetup,
+            closeWhenIdle, onDismiss)
     } else {
+        LaunchedEffect(closeWhenIdle) { if (closeWhenIdle) onDismiss() }
         OttaiFirmwareModeDialog(OttaiFirmwareSession.hasPendingSetup(context, sensorId),
             onMode = { mode = it },
             onDiscard = { done -> scope.launch {
@@ -85,7 +90,8 @@ internal fun OttaiFirmwareModeDialog(pending: Boolean, onMode: (OttaiFirmwareMod
                     }
                 }
                 FirmwareDiscardAction(pending, true, onDiscard, onDismiss)
-                TextButton(onClick = onDismiss, shapes = ButtonDefaults.shapes()) { Text(stringResource(R.string.cancel)) }
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    shapes = ButtonDefaults.shapes()) { Text(stringResource(R.string.cancel)) }
             }
         },
     )
@@ -93,7 +99,8 @@ internal fun OttaiFirmwareModeDialog(pending: Boolean, onMode: (OttaiFirmwareMod
 
 @Composable
 private fun OttaiFirmwareSessionDialog(sensorId: String, address: String, mode: OttaiFirmwareMode,
-    prepareForSetup: Boolean, onPrepared: () -> Unit, onRetrySetup: () -> Unit, onDismiss: () -> Unit) {
+    prepareForSetup: Boolean, onPrepared: () -> Unit, onRetrySetup: () -> Unit, closeWhenIdle: Boolean,
+    onDismiss: () -> Unit) {
     val context = LocalContext.current
     val view = LocalView.current
     var state by remember(sensorId, address, mode) { mutableStateOf(OttaiFirmwareState(mode = mode)) }
@@ -119,6 +126,9 @@ private fun OttaiFirmwareSessionDialog(sensorId: String, address: String, mode: 
         if (prepareForSetup && state.stage == OttaiFirmwareStage.COMPLETE) onPrepared()
     }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(closeWhenIdle, state.transferring) {
+        if (closeWhenIdle && !state.transferring) onDismiss()
+    }
     OttaiFirmwareStatusDialog(state, OttaiFirmwareSession.hasPendingSetup(context, sensorId),
         onInstall = { session?.install() }, onPrepare = { session?.prepareOnly() },
         onCloudRecheck = { session?.recheckWithCloudAuth() },
@@ -138,6 +148,9 @@ internal fun OttaiFirmwareStatusDialog(state: OttaiFirmwareState, pending: Boole
     onDiscard: ((Result<Unit>) -> Unit) -> Unit, onDismiss: () -> Unit, onCloudRecheck: () -> Unit = {},
     prepareForSetup: Boolean = false, onRetry: (() -> Unit)? = null) {
     val mode = state.mode
+    // Setup without local keys already checked the offer through V3 cloud authentication, so
+    // the diagnostic recheck would only repeat that request. Keep it to the explicit test.
+    val showCloudRecheck = state.canRecheckWithCloudAuth && !pending && !prepareForSetup
     var confirmInstall by remember { mutableStateOf(false) }
     var confirmParameters by remember { mutableStateOf(false) }
     val stageText = when (state.stage) {
@@ -180,16 +193,19 @@ internal fun OttaiFirmwareStatusDialog(state: OttaiFirmwareState, pending: Boole
                 if (!prepareForSetup) Text(stringResource(if (mode == OttaiFirmwareMode.STARTED_SENSOR) R.string.ottai_ota_started_mode else R.string.ottai_ota_fresh_mode))
                 if (mode == OttaiFirmwareMode.STARTED_SENSOR) Text(stringResource(R.string.ottai_ota_mode_hint))
                 Text(stringResource(stageText))
-                if (state.canRecheckWithCloudAuth && !pending) Text(stringResource(R.string.ottai_ota_cloud_recheck_hint))
+                if (showCloudRecheck) Text(stringResource(R.string.ottai_ota_cloud_recheck_hint))
                 state.before?.let { ObservationText(R.string.ottai_ota_before, it) }
                 state.after?.let { ObservationText(R.string.ottai_ota_after, it) }
                 if (state.firmware.isNotEmpty()) Text(stringResource(R.string.ottai_ota_version, state.firmware, state.target.ifEmpty { "—" }))
                 if (state.totalBytes > 0) {
                     Text(stringResource(R.string.ottai_ota_package, state.totalBytes, state.sha256))
-                    LinearWavyProgressIndicator(
-                        progress = { state.acknowledgedBytes.toFloat() / state.totalBytes },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    // An empty bar beside an unconfirmed install reads as work in progress.
+                    if (state.transferring || state.acknowledgedBytes > 0) {
+                        LinearWavyProgressIndicator(
+                            progress = { state.acknowledgedBytes.toFloat() / state.totalBytes },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
                 if (state.errorCode.isNotEmpty()) Text(stringResource(R.string.ottai_ota_error_code, state.errorCode))
             }
@@ -204,7 +220,7 @@ internal fun OttaiFirmwareStatusDialog(state: OttaiFirmwareState, pending: Boole
                     Button(onClick = { confirmInstall = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                         shapes = ButtonDefaults.shapes()) { Text(stringResource(R.string.ottai_ota_install)) }
                 }
-                if (state.canRecheckWithCloudAuth && !pending) {
+                if (showCloudRecheck) {
                     OutlinedButton(onClick = onCloudRecheck, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                         shapes = ButtonDefaults.shapes()) { Text(stringResource(R.string.ottai_ota_cloud_recheck)) }
                 }
