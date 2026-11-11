@@ -5,7 +5,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
-import android.os.Build
 import android.view.WindowManager
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
@@ -38,10 +37,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -53,34 +51,15 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.LocaleManagerCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import java.io.ByteArrayInputStream
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import tk.glucodata.Log
-import tk.glucodata.Natives
 import tk.glucodata.R
 import tk.glucodata.ui.components.AppTopBar
 import tk.glucodata.ui.util.findActivity
-
-private const val LOGIN_LOG_ID = "ClarityLogin"
-private const val CALLBACK_SCHEME = "dexcomg7"
-
-// A closed screen can still have a native token exchange in progress.
-private val clarityLoginFinishing = AtomicBoolean()
-
-private enum class ClarityLoginPhase { Setup, Web, Completing }
-
-private fun isDexcomPage(uri: Uri): Boolean {
-    val host = uri.host?.lowercase(Locale.ROOT) ?: return false
-    return uri.scheme == "https" && uri.userInfo == null &&
-        (uri.port == -1 || uri.port == 443) &&
-        (host == "dexcom.com" || host.endsWith(".dexcom.com") ||
-            host == "dexcom.eu" || host.endsWith(".dexcom.eu"))
-}
 
 private fun systemCountry(context: Context): String =
     LocaleManagerCompat.getSystemLocales(context)[0]?.country.orEmpty().uppercase(Locale.ROOT)
@@ -88,14 +67,10 @@ private fun systemCountry(context: Context): String =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ClarityLoginScreen(navController: NavController) {
+    val model: ClarityLoginViewModel = viewModel()
+    val state by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var phase by remember { mutableStateOf(ClarityLoginPhase.Setup) }
     var country by rememberSaveable { mutableStateOf(systemCountry(context)) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var completionAttempted by rememberSaveable { mutableStateOf(false) }
-    var loginUrl by remember { mutableStateOf<String?>(null) }
-    var callbackSeen by remember { mutableStateOf(false) }
 
     // Dexcom's credential form is on screen: keep it out of screenshots and recents.
     val window = context.findActivity()?.window
@@ -108,106 +83,17 @@ fun ClarityLoginScreen(navController: NavController) {
         }
     }
 
-    val inProgressText = stringResource(R.string.clarity_login_in_progress)
-    val startErrorText = stringResource(R.string.clarity_login_start_error)
-    val completeErrorText = stringResource(R.string.clarity_login_complete_error)
-    val destinationErrorText = stringResource(R.string.clarity_login_destination_error)
     val tlsErrorText = stringResource(R.string.clarity_login_tls_error)
     val loadErrorText = stringResource(R.string.clarity_login_load_error)
 
-    fun fail(text: String) {
-        Log.e(LOGIN_LOG_ID, text)
-        if (phase == ClarityLoginPhase.Completing) return
-        phase = ClarityLoginPhase.Setup
-        loginUrl = null
-        error = text
-    }
-
-    fun complete(callback: String) {
-        if (!clarityLoginFinishing.compareAndSet(false, true)) {
-            fail(inProgressText)
-            return
-        }
-        phase = ClarityLoginPhase.Completing
-        completionAttempted = true
-        loginUrl = null
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                try {
-                    Natives.clarityLoginFinish(callback)
-                } catch (e: Exception) {
-                    logClarityFailure(LOGIN_LOG_ID, "Complete sign-in", e)
-                    null
-                } finally {
-                    clarityLoginFinishing.set(false)
-                }
-            }
-            when {
-                result == null -> {
-                    phase = ClarityLoginPhase.Setup
-                    error = completeErrorText
-                }
-                result.isEmpty() -> {
-                    Toast.makeText(context, R.string.clarity_login_success, Toast.LENGTH_SHORT).show()
-                    navController.popBackStack()
-                }
-                else -> {
-                    phase = ClarityLoginPhase.Setup
-                    error = context.getString(R.string.clarity_login_retry_error, result)
-                }
-            }
+    LaunchedEffect(state.signedIn) {
+        if (state.signedIn) {
+            Toast.makeText(context, R.string.clarity_login_success, Toast.LENGTH_SHORT).show()
+            navController.popBackStack()
         }
     }
 
-    fun begin() {
-        if (clarityLoginFinishing.get()) {
-            error = inProgressText
-            return
-        }
-        error = null
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    Natives.clarityLoginBegin(
-                        country,
-                        Locale.getDefault().toLanguageTag(),
-                        Build.MANUFACTURER,
-                        Build.MODEL,
-                        Build.VERSION.RELEASE
-                    )
-                }.onFailure { logClarityFailure(LOGIN_LOG_ID, "Begin sign-in", it) }.getOrNull()
-            }
-            when {
-                result == null || result.size != 2 -> error = startErrorText
-                result[1].isNotEmpty() -> error = result[1]
-                !isDexcomPage(Uri.parse(result[0])) -> error = startErrorText
-                else -> {
-                    callbackSeen = false
-                    loginUrl = result[0]
-                    phase = ClarityLoginPhase.Web
-                }
-            }
-        }
-    }
-
-    fun navigate(uri: Uri): Boolean {
-        if (phase != ClarityLoginPhase.Web) return true
-        if (uri.scheme == CALLBACK_SCHEME) {
-            if (!callbackSeen) {
-                callbackSeen = true
-                complete(uri.toString())
-            }
-            return true
-        }
-        if (isDexcomPage(uri)) return false
-        fail(destinationErrorText)
-        return true
-    }
-
-    BackHandler(enabled = phase == ClarityLoginPhase.Web) {
-        phase = ClarityLoginPhase.Setup
-        loginUrl = null
-    }
+    BackHandler(enabled = state.phase == ClarityLoginPhase.Web, onBack = model::leaveWeb)
 
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp),
@@ -215,9 +101,8 @@ fun ClarityLoginScreen(navController: NavController) {
             AppTopBar(
                 title = stringResource(R.string.clarity_sign_in),
                 onNavigateBack = {
-                    if (phase == ClarityLoginPhase.Web) {
-                        phase = ClarityLoginPhase.Setup
-                        loginUrl = null
+                    if (state.phase == ClarityLoginPhase.Web) {
+                        model.leaveWeb()
                     } else {
                         navController.popBackStack()
                     }
@@ -225,19 +110,19 @@ fun ClarityLoginScreen(navController: NavController) {
             )
         }
     ) { padding ->
-        val url = loginUrl
+        val url = state.loginUrl
         when {
-            phase == ClarityLoginPhase.Web && url != null -> ClarityLoginWebView(
+            state.phase == ClarityLoginPhase.Web && url != null -> ClarityLoginWebView(
                 url = url,
-                onNavigate = ::navigate,
-                onFailure = ::fail,
+                onNavigate = model::navigate,
+                onFailure = model::fail,
                 tlsErrorText = tlsErrorText,
                 loadErrorText = loadErrorText,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
             )
-            phase == ClarityLoginPhase.Completing -> Box(
+            state.phase == ClarityLoginPhase.Completing -> Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
@@ -278,15 +163,15 @@ fun ClarityLoginScreen(navController: NavController) {
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
                 )
-                error?.let {
+                state.error?.let {
                     Text(
-                        text = it,
+                        text = it.resolve(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
                 Button(
-                    onClick = ::begin,
+                    onClick = { model.begin(country) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 56.dp),
@@ -296,9 +181,9 @@ fun ClarityLoginScreen(navController: NavController) {
                 ) {
                     Text(stringResource(R.string.clarity_sign_in))
                 }
-                if (completionAttempted) {
+                if (state.completionAttempted) {
                     OutlinedButton(
-                        onClick = { complete("") },
+                        onClick = model::completePending,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 56.dp),
@@ -345,7 +230,7 @@ private fun ClarityLoginWebView(
                         request: WebResourceRequest
                     ): WebResourceResponse? {
                         if (request.url.scheme == "https") return null
-                        Log.e(LOGIN_LOG_ID, "Blocked non-HTTPS sign-in resource")
+                        Log.e(CLARITY_LOGIN_LOG_ID, "Blocked non-HTTPS sign-in resource")
                         return WebResourceResponse(
                             "text/plain", "UTF-8", 403, "Forbidden",
                             emptyMap(), ByteArrayInputStream(ByteArray(0))
@@ -354,7 +239,7 @@ private fun ClarityLoginWebView(
 
                     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                         handler.cancel()
-                        Log.e(LOGIN_LOG_ID, "Sign-in TLS certificate error code=${error.primaryError}")
+                        Log.e(CLARITY_LOGIN_LOG_ID, "Sign-in TLS certificate error code=${error.primaryError}")
                         failure(tlsErrorText)
                     }
 
@@ -363,7 +248,7 @@ private fun ClarityLoginWebView(
                         request: WebResourceRequest,
                         error: WebResourceError
                     ) {
-                        Log.e(LOGIN_LOG_ID, "Sign-in resource error code=${error.errorCode} mainFrame=${request.isForMainFrame}")
+                        Log.e(CLARITY_LOGIN_LOG_ID, "Sign-in resource error code=${error.errorCode} mainFrame=${request.isForMainFrame}")
                         if (request.isForMainFrame) failure(loadErrorText)
                     }
 
@@ -372,14 +257,14 @@ private fun ClarityLoginWebView(
                         request: WebResourceRequest,
                         errorResponse: WebResourceResponse
                     ) {
-                        Log.e(LOGIN_LOG_ID, "Sign-in HTTP error=${errorResponse.statusCode} mainFrame=${request.isForMainFrame}")
+                        Log.e(CLARITY_LOGIN_LOG_ID, "Sign-in HTTP error=${errorResponse.statusCode} mainFrame=${request.isForMainFrame}")
                         if (request.isForMainFrame) {
                             failure(context.getString(R.string.clarity_login_http_error, errorResponse.statusCode))
                         }
                     }
 
                     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-                        if (url.startsWith("$CALLBACK_SCHEME:")) {
+                        if (url.startsWith("$CLARITY_CALLBACK_SCHEME:")) {
                             view.stopLoading()
                             navigate(Uri.parse(url))
                         }

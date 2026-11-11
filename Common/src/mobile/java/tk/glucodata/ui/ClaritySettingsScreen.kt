@@ -32,16 +32,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import java.io.File
 import java.text.DateFormat
@@ -51,13 +51,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import tk.glucodata.ClarityStatus
-import tk.glucodata.Log
-import tk.glucodata.Natives
 import tk.glucodata.R
 import tk.glucodata.ui.components.AppTopBar
 import tk.glucodata.ui.components.CardPosition
@@ -66,22 +60,17 @@ import tk.glucodata.ui.components.SectionLabel
 import tk.glucodata.ui.components.SettingsItem
 import tk.glucodata.ui.components.SettingsSwitchItem
 
-private const val LOG_ID = "ClaritySettings"
 private const val CLARITY_PROVIDER_LIBRARY = "liblibre_receiver_skb.so"
 private const val EARLIEST_START_SECONDS = 1598911200L
 
 internal fun clarityProviderPackaged(context: Context): Boolean =
     File(context.applicationInfo.nativeLibraryDir, CLARITY_PROVIDER_LIBRARY).isFile
 
-// Native exception text can carry tokens or URLs, so only the type is logged.
-internal fun logClarityFailure(tag: String, operation: String, error: Throwable) {
-    Log.e(tag, "$operation: ${error.javaClass.name}")
+@Composable
+internal fun ClarityMessage.resolve(): String = when (this) {
+    is ClarityMessage.Text -> text
+    is ClarityMessage.Resource -> if (detail == null) stringResource(id) else stringResource(id, detail)
 }
-
-private fun readClarityStatus(): ClarityStatus? =
-    runCatching { Natives.clarityStatus() }
-        .onFailure { logClarityFailure(LOG_ID, "Read status", it) }
-        .getOrNull()
 
 private fun localDateOf(epochSeconds: Long): LocalDate =
     Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).toLocalDate()
@@ -96,43 +85,14 @@ private fun startSecondsOfPickerMillis(pickerMillis: Long): Long =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ClaritySettingsScreen(navController: NavController) {
+    val model: ClaritySettingsViewModel = viewModel()
+    val state by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val providerPackaged = remember { clarityProviderPackaged(context) }
-    var status by remember { mutableStateOf<ClarityStatus?>(null) }
-    var message by remember { mutableStateOf<String?>(null) }
     var showDatePicker by remember { mutableStateOf(false) }
     var proposedStart by remember { mutableStateOf<Long?>(null) }
 
-    suspend fun refresh() {
-        withContext(Dispatchers.IO) { readClarityStatus() }?.let { status = it }
-    }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            refresh()
-            delay(2_000)
-        }
-    }
-
-    val saveErrorText = stringResource(R.string.clarity_save_settings_error)
-    fun configure(enabled: Boolean, libre3History: Boolean, since: Long) {
-        scope.launch {
-            val error = withContext(Dispatchers.IO) {
-                runCatching { Natives.clarityConfigure(enabled, libre3History, false, since) }
-                    .onFailure { logClarityFailure(LOG_ID, "Save settings", it) }
-                    .getOrNull()
-            }
-            message = when {
-                error == null -> saveErrorText
-                error.isEmpty() -> null
-                else -> error
-            }
-            refresh()
-        }
-    }
-
-    val current = status
+    val current = state.status
     val available = current?.available == true
     val signedIn = available && !current.account.isNullOrEmpty()
     val uploading = current?.enabled == true
@@ -163,7 +123,7 @@ fun ClaritySettingsScreen(navController: NavController) {
                 subtitle = stringResource(R.string.clarity_send_enabled_desc),
                 checked = uploading,
                 onCheckedChange = { enabled ->
-                    current?.let { configure(enabled, it.libre3History, it.since) }
+                    current?.let { model.configure(enabled, it.libre3History, it.since) }
                 },
                 icon = Icons.Default.CloudUpload,
                 enabled = signedIn || uploading,
@@ -173,9 +133,9 @@ fun ClaritySettingsScreen(navController: NavController) {
                 ClarityStatusCard(current)
             }
 
-            message?.let {
+            state.message?.let {
                 Text(
-                    text = it,
+                    text = it.resolve(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -194,7 +154,7 @@ fun ClaritySettingsScreen(navController: NavController) {
 
             Button(
                 onClick = {
-                    message = null
+                    model.clearMessage()
                     navController.navigate("settings/clarity/login")
                 },
                 modifier = Modifier
@@ -245,7 +205,7 @@ fun ClaritySettingsScreen(navController: NavController) {
                     subtitle = stringResource(R.string.clarity_use_history_desc),
                     checked = current?.libre3History == true,
                     onCheckedChange = { history ->
-                        current?.let { configure(it.enabled, history, it.since) }
+                        current?.let { model.configure(it.enabled, history, it.since) }
                     },
                     icon = Icons.Default.History,
                     iconTint = MaterialTheme.colorScheme.tertiary,
@@ -255,15 +215,7 @@ fun ClaritySettingsScreen(navController: NavController) {
             }
 
             OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        withContext(Dispatchers.IO) {
-                            runCatching { Natives.clarityWake() }
-                                .onFailure { logClarityFailure(LOG_ID, "Send now", it) }
-                        }
-                        refresh()
-                    }
-                },
+                onClick = model::sendNow,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 56.dp),
@@ -343,7 +295,7 @@ fun ClaritySettingsScreen(navController: NavController) {
                 TextButton(
                     onClick = {
                         proposedStart = null
-                        current?.let { configure(it.enabled, it.libre3History, start) }
+                        current?.let { model.configure(it.enabled, it.libre3History, start) }
                     },
                     shapes = ButtonDefaults.shapes(),
                     contentPadding = ButtonDefaults.TextButtonContentPadding,
